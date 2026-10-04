@@ -1,252 +1,401 @@
+
+import sys
+from pathlib import Path
+
 import streamlit as st
 
-from Mugil.Verification_Robustness.metrics import VerificationMetrics
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from Disha.Marketplace_Data_Logistics.api import MarketplaceService
+from Disha.Marketplace_Data_Logistics.database import Database
+from integration.agriweave_pipeline import AgriweavePipeline
 
 
 st.set_page_config(
-    page_title="AGRIWEAVE Command Center",
+    page_title="AGRIWEAVE | Intelligent Farmer Market Network",
     page_icon="??",
     layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+st.markdown("""
+<style>
+.block-container {
+    max-width: 1450px;
+    padding-top: 1.5rem;
+}
+.hero {
+    padding: 28px 32px;
+    border-radius: 18px;
+    background: linear-gradient(135deg, #12372A 0%, #1F5D45 55%, #2D7A58 100%);
+    color: white;
+    margin-bottom: 22px;
+}
+.hero h1 {
+    font-size: 3rem;
+    margin-bottom: 4px;
+}
+.hero p {
+    font-size: 1.1rem;
+    opacity: 0.9;
+}
+.stage {
+    padding: 16px;
+    border-radius: 14px;
+    border: 1px solid #d9e4dd;
+    background: #f8fbf9;
+    text-align: center;
+}
+.stage.active {
+    border: 2px solid #2D7A58;
+}
+.metric-card {
+    padding: 18px;
+    border-radius: 14px;
+    background: #f8fbf9;
+    border: 1px solid #d9e4dd;
+}
+.rescue {
+    padding: 22px;
+    border-radius: 16px;
+    background: #fff8e8;
+    border: 2px solid #e4b84a;
+}
+.success {
+    padding: 22px;
+    border-radius: 16px;
+    background: #edf8f1;
+    border: 2px solid #55a56f;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+@st.cache_resource
+def get_pipeline():
+    marketplace = MarketplaceService(
+        database=Database("integration_demo.db")
+    )
+    return AgriweavePipeline(
+        marketplace=marketplace,
+        dry_run=True,
+    )
+
+
+def run_normal_demo():
+    pipeline = get_pipeline()
+    data = pipeline.get_market_data(crop="Tomato")
+    demand = data["demands"][0]
+    result = pipeline.run(demand=demand)
+    return pipeline, data, demand, result
+
+
+def run_rescue_demo(pipeline, data, demand):
+    original_supplies = [
+        s for s in data["supplies"]
+        if s.id != "SUP-DEMO-004"
+    ]
+
+    ai_result = pipeline.run_ai_matching(
+        demand=demand,
+        supplies=original_supplies,
+    )
+
+    selected = pipeline.select_supply_set(
+        demand=demand,
+        supplies=original_supplies,
+        ai_result=ai_result,
+    )
+
+    optimization = pipeline.run_optimization(
+        demand=demand,
+        supplies=selected,
+    )
+
+    order = pipeline.build_order(
+        demand=demand,
+        supplies=selected,
+        optimization=optimization,
+    )
+
+    return pipeline.run_supply_rescue(
+        demand=demand,
+        order=order,
+        supplies=selected,
+        optimization=optimization,
+        failed_supply_id="SUP-DEMO-001",
+        replacement_supplies=data["supplies"],
+    )
+
+
+st.markdown("""
+<div class="hero">
+    <h1>?? AGRIWEAVE</h1>
+    <p>Intelligent market access for marginal farmers</p>
+    <p>Demand-driven matching ? Collective aggregation ? Verified recovery</p>
+</div>
+""", unsafe_allow_html=True)
+
+
+pipeline, data, demand, result = run_normal_demo()
+
+# ---------------------------------------------------------
+# TOP STATUS
+# ---------------------------------------------------------
+st.subheader("Live Market Decision")
+
+cols = st.columns(5)
+
+with cols[0]:
+    st.metric("Buyer Demand", f"{demand.quantity_kg:.0f} kg")
+
+with cols[1]:
+    st.metric("Available Supply", f"{result.matched_quantity_kg:.0f} kg")
+
+with cols[2]:
+    st.metric("Optimized Order", f"{result.optimized_quantity_kg:.0f} kg")
+
+with cols[3]:
+    st.metric("Farmers Matched", len(result.supply_ids))
+
+with cols[4]:
+    verified = bool(
+        result.verification
+        and result.verification.get("verified")
+    )
+    st.metric("Verification", "PASSED" if verified else "FAILED")
+
+
+# ---------------------------------------------------------
+# FLOW
+# ---------------------------------------------------------
+st.subheader("Decision Pipeline")
+
+flow = [
+    ("1", "Buyer Demand", True),
+    ("2", "AI Matching", True),
+    ("3", "Aggregation", True),
+    ("4", "Optimization", True),
+    ("5", "Verification", verified),
+]
+
+flow_cols = st.columns(5)
+
+for col, (num, label, passed) in zip(flow_cols, flow):
+    with col:
+        state = "?" if passed else "?"
+        st.markdown(
+            f"""
+            <div class="stage {'active' if passed else ''}">
+                <strong>{num}. {label}</strong><br>
+                <span style="font-size:1.5rem">{state}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+# ---------------------------------------------------------
+# MARKET INTELLIGENCE
+# ---------------------------------------------------------
+st.subheader("AI Market Intelligence")
+
+left, right = st.columns(2)
+
+with left:
+    st.markdown("### Recommended Supply")
+    st.write(result.supply_ids)
+
+    explanation = getattr(result, "ai_explanation", "")
+    if explanation:
+        st.info(explanation)
+    else:
+        st.info(
+            f"AI selected {len(result.supply_ids)} farmer supplies "
+            f"to satisfy the buyer demand."
+        )
+
+with right:
+    st.markdown("### Economics")
+
+    order = result.order
+
+    if order:
+        st.write(
+            f"**Estimated selling price:** ?{order.selling_price_per_kg:.2f}/kg"
+        )
+        st.write(
+            f"**Order value:** "
+            f"?{order.quantity_kg * order.selling_price_per_kg:,.0f}"
+        )
+
+    st.write(
+        "**Market gap:** "
+        f"{result.matched_quantity_kg - demand.quantity_kg:.0f} kg surplus"
+    )
+
+
+# ---------------------------------------------------------
+# FARMER BREAKDOWN
+# ---------------------------------------------------------
+st.subheader("Farmer Supply Network")
+
+rows = []
+
+for supply in data["supplies"]:
+    rows.append({
+        "Supply": supply.id,
+        "Farmer": supply.farmer_id,
+        "Location": supply.location,
+        "Crop": supply.crop,
+        "Quantity (kg)": supply.quantity_kg,
+        "Price (?/kg)": supply.expected_price_per_kg,
+        "Quality": supply.quality,
+        "Status": supply.status,
+    })
+
+st.dataframe(
+    rows,
+    use_container_width=True,
+    hide_index=True,
 )
 
 
-def build_dashboard_state(
-    verification_result=None,
-    recovery_result=None,
-    metrics=None,
+# ---------------------------------------------------------
+# VERIFICATION
+# ---------------------------------------------------------
+st.subheader("Independent Verification")
+
+if verified:
+    st.markdown(
+        """
+        <div class="success">
+        <strong>? ORDER VERIFIED</strong><br>
+        Every allocated supply passed independent supply,
+        demand and constraint verification.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+else:
+    st.error("Order rejected by independent verification.")
+
+
+# ---------------------------------------------------------
+# SUPPLY RESCUE
+# ---------------------------------------------------------
+st.divider()
+st.subheader("?? Supply Rescue Simulation")
+
+st.write(
+    "Simulate a committed farmer failing after the order has been planned."
+)
+
+if st.button(
+    "Simulate SUP-DEMO-001 Failure",
+    type="primary",
+    use_container_width=True,
 ):
-    """
-    Convert system results into a dashboard-friendly state.
+    rescue = run_rescue_demo(pipeline, data, demand)
 
-    The dashboard only displays decisions produced by the
-    verification and recovery layers. It does not make decisions.
-    """
+    st.session_state["rescue"] = rescue
 
-    verification_result = verification_result or {}
-    recovery_result = recovery_result or {}
-    metrics = metrics or VerificationMetrics()
+rescue = st.session_state.get("rescue")
 
-    return {
-        "match": {
-            "decision": verification_result.get(
-                "decision",
-                "WAITING",
-            ),
-            "verified": verification_result.get(
-                "verified",
-                False,
-            ),
-            "summary": verification_result.get(
-                "summary",
-                "No match verification has been submitted yet.",
-            ),
-            "errors": verification_result.get(
-                "errors",
-                [],
-            ),
-            "warnings": verification_result.get(
-                "warnings",
-                [],
-            ),
-        },
-        "recovery": {
-            "decision": recovery_result.get(
-                "decision",
-                "NO RECOVERY",
-            ),
-            "recovered": recovery_result.get(
-                "recovered",
-                False,
-            ),
-            "summary": recovery_result.get(
-                "summary",
-                "No supply recovery has been attempted.",
-            ),
-            "errors": recovery_result.get(
-                "errors",
-                [],
-            ),
-        },
-        "metrics": metrics.snapshot(),
-    }
-
-
-def render_status(label, value):
-    st.metric(label=label, value=value)
-
-
-def render_dashboard(state):
-    st.title("?? AGRIWEAVE Command Center")
-    st.caption(
-        "Intelligent market access and verification "
-        "for fragmented agricultural supply."
+if rescue:
+    st.markdown(
+        """
+        <div class="rescue">
+        <h3>? Supply Disruption Detected</h3>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
-    match = state["match"]
-    recovery = state["recovery"]
-    metrics = state["metrics"]
+    r1, r2, r3, r4 = st.columns(4)
 
-    st.divider()
-
-    # ---------------------------------------------------------
-    # TOP-LEVEL SYSTEM STATUS
-    # ---------------------------------------------------------
-
-    st.subheader("System Status")
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        render_status(
-            "Match Decision",
-            match["decision"],
+    with r1:
+        st.metric(
+            "Failed Supply",
+            rescue["failed_supply_id"],
         )
 
-    with col2:
-        render_status(
-            "Recovery",
-            recovery["decision"],
+    with r2:
+        st.metric(
+            "Shortfall",
+            f'{rescue["shortfall_quantity_kg"]:.0f} kg',
         )
 
-    with col3:
-        render_status(
-            "Verification Rate",
-            f"{metrics['verification']['success_rate_percent']}%",
+    with r3:
+        st.metric(
+            "Replacement",
+            ", ".join(rescue["replacement_supply_ids"]),
         )
 
-    with col4:
-        render_status(
-            "Recovery Success",
-            f"{metrics['recovery']['success_rate_percent']}%",
+    with r4:
+        st.metric(
+            "Recovered",
+            f'{rescue["verified_recovered_quantity_kg"]:.0f} kg',
         )
 
-    st.divider()
-
-    # ---------------------------------------------------------
-    # MATCH VERIFICATION
-    # ---------------------------------------------------------
-
-    st.subheader("?? Match Verification")
-
-    if match["verified"]:
-        st.success(match["summary"])
+    if rescue["recovered"]:
+        st.success(
+            f'RECOVERY VERIFIED ? '
+            f'{rescue["verified_recovered_quantity_kg"]:.0f} kg recovered '
+            f'from the {rescue["shortfall_quantity_kg"]:.0f} kg shortfall.'
+        )
     else:
-        st.warning(match["summary"])
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.write("**Verification Decision**")
-        st.code(match["decision"])
-
-    with col2:
-        st.write("**Verification Errors**")
-
-        if match["errors"]:
-            for error in match["errors"]:
-                st.error(error)
-        else:
-            st.success("No verification errors.")
-
-    if match["warnings"]:
-        st.write("**Warnings**")
-
-        for warning in match["warnings"]:
-            st.warning(warning)
-
-    st.divider()
-
-    # ---------------------------------------------------------
-    # SUPPLY RESCUE
-    # ---------------------------------------------------------
-
-    st.subheader("?? Supply Rescue")
-
-    if recovery["recovered"]:
-        st.success(recovery["summary"])
-    else:
-        st.info(recovery["summary"])
-
-    if recovery["errors"]:
-        for error in recovery["errors"]:
-            st.error(error)
-
-    st.divider()
-
-    # ---------------------------------------------------------
-    # OPERATIONAL METRICS
-    # ---------------------------------------------------------
-
-    st.subheader("?? Operational Intelligence")
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    with col1:
-        render_status(
-            "Total Matches",
-            metrics["verification"]["total"],
+        st.error(
+            f'Recovery rejected: {rescue["summary"]}'
         )
 
-    with col2:
-        render_status(
-            "Verified",
-            metrics["verification"]["verified"],
-        )
+    st.markdown("### Recovery Decision Trace")
 
-    with col3:
-        render_status(
-            "Rejected",
-            metrics["verification"]["rejected"],
-        )
+    for item in rescue.get("trace", []):
+        st.write("?", item)
 
-    with col4:
-        render_status(
-            "Recovery Attempts",
-            metrics["recovery"]["total"],
-        )
+    st.json({
+        "decision": rescue["decision"],
+        "recovery_ratio": rescue["recovery_ratio"],
+        "replacement_supply_ids": rescue["replacement_supply_ids"],
+        "errors": rescue["errors"],
+        "warnings": rescue["warnings"],
+    })
 
-    st.divider()
 
-    # ---------------------------------------------------------
-    # FAILURE INTELLIGENCE
-    # ---------------------------------------------------------
+# ---------------------------------------------------------
+# JUDGE SUMMARY
+# ---------------------------------------------------------
+st.divider()
 
-    st.subheader("?? Failure Intelligence")
+st.subheader("Why AGRIWEAVE?")
 
-    rejection_reasons = metrics["rejection_reasons"]
+a, b, c = st.columns(3)
 
-    if rejection_reasons:
-        st.write("**Top Match Rejection Reasons**")
-
-        for reason, count in rejection_reasons.items():
-            st.write(f"- {reason} — **{count}**")
-    else:
-        st.success("No match rejection reasons recorded.")
-
-    recovery_failures = metrics["recovery_failure_reasons"]
-
-    if recovery_failures:
-        st.write("**Recovery Failure Reasons**")
-
-        for reason, count in recovery_failures.items():
-            st.write(f"- {reason} — **{count}**")
-    else:
-        st.success("No recovery failures recorded.")
-
-    st.divider()
-
-    st.caption(
-        "AGRIWEAVE verification is fail-closed: "
-        "unexpected or invalid verification results are never "
-        "automatically accepted."
+with a:
+    st.markdown("### ?? Demand First")
+    st.write(
+        "Farmers are matched against real buyer requirements "
+        "instead of waiting for generic marketplace demand."
     )
 
-
-if __name__ == "__main__":
-    metrics = VerificationMetrics()
-
-    state = build_dashboard_state(
-        metrics=metrics,
+with b:
+    st.markdown("### ?? Collective Supply")
+    st.write(
+        "Multiple marginal farmers can combine their fragmented "
+        "supply into a buyer-sized commercial order."
     )
 
-    render_dashboard(state)
+with c:
+    st.markdown("### ??? Resilient")
+    st.write(
+        "If a committed supplier fails, AGRIWEAVE finds, "
+        "optimizes and independently verifies a replacement."
+    )
+
+st.caption(
+    "AGRIWEAVE ? AI proposes ? Optimization allocates ? "
+    "Verification protects ? Marketplace executes"
+)
