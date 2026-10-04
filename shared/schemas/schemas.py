@@ -82,3 +82,32 @@ class RescueResult:
     recovered_quantity_kg: float = 0.0
     recovered: bool = False
     explanation: str = ""
+
+
+@dataclass
+class Location:
+    """
+    Geographic information associated with a marketplace entity.
+    """
+
+    entity_type: str
+    entity_id: str
+    latitude: float
+    longitude: float
+    address: Optional[str] = None
+
+
+@dataclass
+class RouteEstimate:
+    """
+    Estimated movement between a supply origin and buyer destination.
+    """
+
+    origin_entity_type: str
+    origin_entity_id: str
+    destination_entity_type: str
+    destination_entity_id: str
+    distance_km: float
+    estimated_travel_time_hours: float
+    estimated_transport_cost: float
+    vehicle_type: str
